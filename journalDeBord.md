@@ -8,6 +8,14 @@
 - Réflexion sur l'interprétation de la couleur du sabre selon l'état (idle / toucher détecté), en vue d'un futur retour visuel sur le sabre et/ou sur l'interface web.
 - Définition de l'architecture générale du système : sabre laser → Bluetooth → Raspberry Pi → serveur → interface web.
 
+```mermaid
+flowchart LR
+    A[Sabre laser<br/>XIAO nRF52840 Sense + IMU] -- Bluetooth --> B[Raspberry Pi]
+    B --> C[Serveur / réception]
+    C --> D[Interface Web]
+    D -->|Affiche l'état du toucher| E[Utilisateur]
+```
+
 ## Lucas :
 - Écriture d'un script Python de test (`code.py`) pour la détection de toucher sur le sabre laser, exécuté sur un microcontrôleur **Seeed XIAO nRF52840 Sense** (CircuitPython) équipé d'un capteur IMU **LSM6DS3TRC** (accéléromètre + gyroscope).
 - Implémentation de la lecture continue de l'IMU (accélération et gyroscope) à une cadence stabilisée d'environ 50 Hz.
@@ -25,6 +33,19 @@
   avec `ax,ay,az` les accélérations, `gx,gy,gz` les vitesses angulaires, et `hit` valant `1` si un toucher est actif, `0` sinon.
 - Tests effectués en local (branchement du sabre en USB, lecture de la sortie série) pour valider la fiabilité de la détection.
 
+```mermaid
+flowchart TD
+    A[Lecture IMU ~50Hz] --> B[Calcul magnitude accélération]
+    B --> C{Choc > seuil ET Jerk > seuil ?}
+    C -- Non --> A
+    C -- Oui --> D{Cooldown écoulé ?}
+    D -- Non --> A
+    D -- Oui --> E[Toucher détecté: hit = 1]
+    E --> F[LED rouge 0.3s + démarrage cooldown]
+    F --> G[Envoi trame série: D,ax,ay,az,gx,gy,gz,hit]
+    A --> G
+```
+
 ## Tom :
 - Création d'une interface web de test permettant d'afficher les données reçues, en particulier l'état du toucher (`hit`).
 - Objectif de cette première version : valider qu'une page web est capable de recevoir/afficher une donnée simple (toucher détecté ou non) avant d'intégrer la vraie chaîne de communication (Bluetooth + Raspberry Pi).
@@ -33,6 +54,9 @@
 ---
 
 # 03.09 :
+
+## Lucas :
+- Absent.
 
 ## Tom :
 - Mise en place complète de la configuration du **Raspberry Pi**, en vue d'y héberger le serveur et l'interface web du projet.
@@ -59,5 +83,12 @@
 - **Démarrage automatique** : création d'un service `systemd` (`cuto-bluetooth.service`) pour que le script Python de réception Bluetooth démarre automatiquement au boot du Raspberry (Apache et MariaDB étant déjà configurés pour démarrer seuls via `systemctl enable`).
 - Rédaction d'un récapitulatif des points de sécurité mis en place (pairing Bluetooth sécurisé, whitelist d'appareils, chiffrement applicatif, stockage protégé de la clé, utilisateur MariaDB à droits limités, fichier `config.php` non versionné, accès réseau limité).
 
-## Lucas 
-- Absen
+```mermaid
+flowchart LR
+    A[Sabre laser] -- Trame chiffrée Fernet --> B[Bluetooth appairé + PIN]
+    B --> C[recepteur.py<br/>déchiffrement]
+    C -- INSERT --> D[(MariaDB<br/>base cuto)]
+    D -- SELECT --> E[index.php<br/>via config.php]
+    E --> F[Interface Web Apache]
+    F --> G[Navigateur utilisateur]
+```

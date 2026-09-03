@@ -58,3 +58,6 @@
   - test de lancement manuel : interface web accessible sur `http://ip_du_raspberry/cuto/`, script de réception lancé en parallèle dans son environnement virtuel Python.
 - **Démarrage automatique** : création d'un service `systemd` (`cuto-bluetooth.service`) pour que le script Python de réception Bluetooth démarre automatiquement au boot du Raspberry (Apache et MariaDB étant déjà configurés pour démarrer seuls via `systemctl enable`).
 - Rédaction d'un récapitulatif des points de sécurité mis en place (pairing Bluetooth sécurisé, whitelist d'appareils, chiffrement applicatif, stockage protégé de la clé, utilisateur MariaDB à droits limités, fichier `config.php` non versionné, accès réseau limité).
+
+## Lucas 
+- Absen

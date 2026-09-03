@@ -92,3 +92,28 @@ flowchart LR
     E --> F[Interface Web Apache]
     F --> G[Navigateur utilisateur]
 ```
+
+- **Passage au BLE (Bluetooth Low Energy)** : correction d'approche par rapport à la config initiale — le XIAO nRF52840 Sense fonctionne en BLE et non en Bluetooth classique, donc utilisation de la bibliothèque `bleak` côté Raspberry Pi (au lieu de `pybluez`, prévue pour le Bluetooth classique/SPP).
+- **Ajout de la transmission BLE côté sabre** (`code.py`) : le sabre devient un périphérique BLE annonçant un service **Nordic UART Service (NUS)** via `adafruit_ble`, avec un nom personnalisable (`Sabre-01`) et l'affichage de son adresse MAC BLE sur le port série au démarrage. Envoi de la trame `"HIT"` en notification à chaque toucher détecté.
+- **Récupération de l'adresse MAC du sabre** (`EF:2A:91:14:25:D3`) via le port série du sabre, puis confirmation par un script de scan BLE (`scanner.py`, basé sur `BleakScanner.discover()`) exécuté sur le Raspberry Pi.
+- **Écriture du script de réception** (`recepteur.py`) : connexion en BLE au sabre via `bleak`, abonnement aux notifications du service UART, traitement de chaque `"HIT"` reçu (emplacement prévu pour l'insertion dans MariaDB).
+- **Débogage de la connexion BLE** :
+  - erreur `TypeError: 'bool' object is not callable` sur `client.is_connected()` → corrigée : `is_connected` est une propriété (et non une méthode) dans les versions récentes de `bleak`.
+  - erreur `BleakDeviceNotFoundError` avec `BleakScanner.find_device_by_address()` → cette méthode s'est révélée peu fiable avec l'adaptateur BlueZ du Raspberry utilisé. Contournement : scan complet avec `BleakScanner.discover()` (comme dans `scanner.py`) puis filtrage sur l'adresse MAC recherchée, avant de passer l'appareil trouvé à `BleakClient`.
+- **Validation** : le sabre `Sabre-01` (adresse `EF:2A:91:14:25:D3`) est correctement détecté par le scan et la connexion BLE fonctionne.
+- ⚠️ À ce stade, la trame `"HIT"` est envoyée **en clair** (pas encore de chiffrement applicatif Fernet ni d'insertion MariaDB réelle) : ces deux points restent à implémenter dans une prochaine étape.
+
+```mermaid
+sequenceDiagram
+    participant S as Sabre (BLE périphérique)
+    participant R as Raspberry Pi (bleak)
+    S->>S: Démarrage, annonce BLE (Sabre-01)
+    R->>R: scanner.py : BleakScanner.discover()
+    R-->>S: Détection de l'adresse MAC
+    R->>R: recepteur.py : discover() + filtre adresse
+    R->>S: BleakClient : connexion
+    S-->>R: Connexion établie
+    R->>S: start_notify (service UART)
+    S-->>R: Notification "HIT" (à chaque toucher)
+    R->>R: traiter_toucher()
+```

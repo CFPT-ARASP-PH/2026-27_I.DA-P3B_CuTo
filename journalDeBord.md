@@ -1,4 +1,4 @@
-### Journal de bord
+# Journal de bord
 
 # 27.08 :
 
@@ -117,3 +117,78 @@ sequenceDiagram
     S-->>R: Notification "HIT" (à chaque toucher)
     R->>R: traiter_toucher()
 ```
+
+---
+
+# 17.09 :
+
+## Brainstorming :
+- Discussion en vocal sur l'intégration du système BLE directement dans Docker : objectif qu'un seul `docker compose up --build` lance **tout** (base de données, serveur web, tunnel Cloudflare **et** daemon Bluetooth) sans configuration manuelle supplémentaire.
+- Définition des règles de logique de combat :
+  - Un seul sabre touche → **"TOUCHÉ"** affiché dans l'interface.
+  - Deux sabres touchent dans une fenêtre de **200 ms** → **double-touche annulée**, aucun point accordé.
+- Choix de l'architecture : le daemon BLE Python tourne comme 4ème service Docker (`ble_receiver`) en `network_mode: host` pour accéder au stack Bluetooth du Raspberry Pi.
+- Décision du mapping sabre ↔ joueur : association fixe gérée depuis l'interface admin (chaque sabre physique est lié à un joueur en base de données).
+
+```mermaid
+flowchart LR
+    A[Sabre BLE<br/>HIT via UART NUS] --> B[ble_receiver<br/>Python / Bleak]
+    B -->|PyMySQL| C[(MariaDB)]
+    C --> D[API PHP<br/>ble_touches.php]
+    D -->|JSON polling| E[Interface web<br/>arbitre + écran public]
+```
+
+## Lucas :
+- Réflexion sur les seuils de détection côté sabre (`SEUIL_CHOC`, `SEUIL_JERK`) et discussion sur leur calibration pour différencier un vrai impact d'un swing dans le vide.
+- Discussion sur le comportement de la LED lors d'une double-touche (feedback visuel à définir côté microcontrôleur).
+
+### Nouveau service `ble_receiver/`
+- **`Dockerfile`** : image Python 3.11, installation de BlueZ + D-Bus, `bleak` et `PyMySQL`.
+- **`requirements.txt`** : dépendances Python (`bleak==0.22.3`, `PyMySQL==1.1.1`).
+- **`receiver.py`** — daemon BLE complet :
+  - Chargement des sabres actifs depuis la base de données au démarrage.
+  - Connexion simultanée à tous les sabres enregistrés (une tâche asyncio par sabre).
+  - Abonnement aux notifications UART (UUID `6e400003-b5a3-f393-e0a9-e50e24dcca9e`).
+  - **Logique double-touche** : si deux sabres envoient `"HIT"` dans une fenêtre de 200 ms → type `'double'` pour les deux ; sinon → type `'touche'` après expiration de la fenêtre.
+  - Reconnexion automatique en cas de déconnexion (retry toutes les 10 secondes).
+  - Scan BLE périodique (toutes les 30 secondes) → mise à jour de `ble_scan_cache`.
+  - Rechargement dynamique de la liste des sabres depuis la DB (toutes les 30 secondes), sans redémarrer le daemon.
+
+### Nouvelles tables en base de données (`sql/migration_ble.sql`)
+- **`sabres`** : id, adresse MAC, nom, joueur associé (FK), actif, last_seen.
+- **`ble_scan_cache`** : cache des appareils BLE découverts lors du scan périodique.
+- **`touchers`** : id, combat_id, sabre_id, joueur_id, timestamp_ms (Unix ms), type (`touche` / `double` / `annule`).
+
+## Tom :
+- Implémentation complète du système BLE dans Docker :
+
+### Mise à jour `docker-compose.yml`
+- Ajout du service `ble_receiver` avec `network_mode: host` (nécessaire pour BLE sous Linux) et `privileged: true`.
+- Volume `/var/run/dbus:/var/run/dbus` pour que BlueZ puisse fonctionner dans le conteneur.
+- Exposition du port `3306` de MariaDB sur `127.0.0.1` uniquement, pour que `ble_receiver` en mode host network puisse joindre la base de données.
+
+### Nouvelle page admin `admin/sabres.php`
+- Liste des sabres enregistrés avec statut de connexion en temps réel (vert = vu < 60 s, orange = vu < 5 min, rouge = hors ligne).
+- Section "appareils découverts" : affiche le cache du scan BLE avec un bouton **Ajouter** pour enregistrer un nouveau sabre en un clic.
+- Formulaire d'ajout manuel (MAC + nom + joueur associé).
+- Modal d'édition : modifier nom, joueur associé, activer/désactiver un sabre.
+
+### Nouvelle API `api/ble_touches.php`
+- Retourne en JSON les dernières touches BLE d'un combat (`?combat_id=X&since_id=Y`).
+- Utilisée en polling par le JavaScript côté client.
+
+### Intégration dans la page arbitrage (`arbitrage/saisie.php`)
+- Section **"Touches électroniques"** visible pendant un combat en cours.
+- Polling JSON automatique (fréquence réglable via le paramètre `intervalle_actualisation_ms`).
+- Affichage coloré : vert pour "TOUCHÉ — [Joueur]", orange pour "DOUBLE TOUCHE".
+- Indicateur de statut BLE (point vert/rouge).
+
+### Intégration dans l'écran public (`ecran.php` + `assets/js/ble_ecran.js`)
+- Overlay plein écran animé qui s'affiche 2,5 secondes à chaque touche BLE détectée.
+- "TOUCHÉ !" en vert avec le nom du joueur, ou "DOUBLE TOUCHE" en orange.
+- Polling indépendant sur tous les combats en cours simultanément.
+
+### Résultat
+- Un seul `docker compose up --build` lance tout : base de données, serveur web, tunnel HTTPS et daemon BLE.
+- Les sabres se gèrent depuis **Admin → Sabres** : scan automatique + ajout par adresse MAC.
+- Les touches apparaissent en temps réel dans l'interface arbitre et sur l'écran public de la salle.

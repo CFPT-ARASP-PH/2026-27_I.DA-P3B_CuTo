@@ -1,0 +1,76 @@
+services:
+
+  db:
+    image: mariadb:11
+    container_name: sabre_db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
+      MARIADB_DATABASE:      ${DB_NAME:-sabre_arbitrage}
+      MARIADB_USER:          ${DB_USER:-arbitrage_user}
+      MARIADB_PASSWORD:      ${DB_PASS:-arbitrage_pass}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # ⚠️ Port exposé sur localhost uniquement pour le service ble_receiver
+    # (qui tourne en network_mode: host et ne peut pas joindre le réseau Docker)
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    container_name: sabre_web
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:${APP_PORT:-8080}:80"   # LAN : http://<IP-locale>:8080
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-sabre_arbitrage}
+      DB_USER: ${DB_USER:-arbitrage_user}
+      DB_PASS: ${DB_PASS:-arbitrage_pass}
+      BASE_URL: ${BASE_URL:-/}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/var/www/html
+
+  # ── Daemon BLE ─────────────────────────────────────────────────────────────
+  # Tourne avec le réseau hôte pour accéder au stack Bluetooth (BlueZ/D-Bus).
+  # Accède à MariaDB sur 127.0.0.1:3306 (port exposé par le service db).
+  ble_receiver:
+    build: ./ble_receiver
+    container_name: sabre_ble
+    restart: unless-stopped
+    network_mode: host          # Nécessaire pour BLE sur Linux / Raspberry Pi
+    privileged: true            # Accès complet au stack Bluetooth
+    volumes:
+      - /var/run/dbus:/var/run/dbus   # D-Bus pour BlueZ
+    environment:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-sabre_arbitrage}
+      DB_USER: ${DB_USER:-arbitrage_user}
+      DB_PASS: ${DB_PASS:-arbitrage_pass}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── Tunnel public HTTPS (accessible depuis internet, sans ouvrir de port) ──
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: sabre_tunnel
+    restart: unless-stopped
+    command: tunnel --url http://web:80 --no-autoupdate
+    depends_on:
+      - web
+    # L'URL publique s'affiche dans les logs du conteneur :
+    #   docker compose logs tunnel
+
+volumes:
+  db_data:

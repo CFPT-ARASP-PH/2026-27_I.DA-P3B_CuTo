@@ -192,3 +192,116 @@ flowchart LR
 - Un seul `docker compose up --build` lance tout : base de données, serveur web, tunnel HTTPS et daemon BLE.
 - Les sabres se gèrent depuis **Admin → Sabres** : scan automatique + ajout par adresse MAC.
 - Les touches apparaissent en temps réel dans l'interface arbitre et sur l'écran public de la salle.
+
+---
+
+# 01.10 :
+
+## Brainstorming :
+- Objectif de la séance : rendre l'application **installable sur téléphone (PWA)** et transformer le Raspberry Pi en **point d'accès Wi-Fi dédié au tournoi**, sur lequel il faut s'identifier (identifiant + mot de passe) avant d'accéder à l'application.
+- Contraintes définies :
+  - le Wi-Fi du Raspberry est **isolé** : pas d'accès à internet, pas d'accès au réseau local de l'école, pas de SSH depuis le Wi-Fi ;
+  - l'application doit **rester accessible en LAN** (`http://<IP-du-Pi>:8080`) en plus du Wi-Fi ;
+  - les comptes Wi-Fi doivent se gérer **depuis l'interface admin**, sans toucher au Raspberry.
+- Choix techniques : comptes gérés dans l'app (nouvel onglet **Admin → Wi-Fi**) et HTTPS avec une **autorité de certification locale** (une PWA ne s'installe qu'en HTTPS, et le Wi-Fi n'a pas internet pour obtenir un certificat Let's Encrypt).
+
+```mermaid
+flowchart LR
+    T[Téléphone] -- Wi-Fi Sabre-Arbitrage --> P[Portail de connexion<br/>identifiant + mot de passe]
+    P -- accès autorisé IP + MAC --> C[Proxy HTTPS Caddy<br/>https://sabre.lan]
+    C --> W[App PHP / Apache<br/>conteneur web]
+    W --> D[(MariaDB)]
+    A[Admin → Wi-Fi] -- comptes --> D
+    D -- synchro 15 s --> P
+    L[PC en LAN] -- http://IP:8080 --> W
+```
+
+## Lucas :
+
+### Application installable (PWA)
+- Création du **manifeste** (`assets/pwa/manifest.webmanifest`) : nom, couleurs du thème, mode plein écran (`standalone`), raccourcis (Direct, Arbitrage, Classement).
+- Génération des **icônes** (192 px, 512 px, version « maskable » pour Android, icône Apple 180 px) reprenant le logo du sabre.
+- Écriture du **Service Worker** (`sw.js`, à la racine) avec une stratégie prudente adaptée à une app de score en direct :
+  - pages PHP et API : **toujours le réseau**, jamais de cache (pas de score périmé ni de jeton CSRF réutilisé) ;
+  - fichiers statiques (CSS, JS, polices, icônes) : mis en cache pour un chargement rapide ;
+  - page **« Pas de connexion »** affichée si le Wi-Fi est coupé.
+- Ajout d'un bouton **« Installer l'application »** en bas de page (`assets/js/pwa.js`) : vraie invite d'installation sur Android / Chrome / Edge, explication « Partager → Sur l'écran d'accueil » sur iPhone.
+- Adaptation d'Apache (`docker/apache.conf`) pour servir `sw.js` et le manifeste, et passage du cache CSS en `?v=6`.
+
+### Gestion des comptes dans l'app (`admin/wifi.php`)
+- Nouvel onglet **Admin → Wi-Fi** avec deux nouvelles permissions (`wifi.voir`, `wifi.gerer`).
+- Création / modification / désactivation / suppression d'accès Wi-Fi, mots de passe générés faciles à taper (`xxxx-xxxx-xxxx`) et **affichés une seule fois**.
+- Affichage de l'état du Raspberry : « Raspberry synchronisé », nombre de comptes et d'appareils identifiés, instructions de connexion à donner aux utilisateurs.
+- Nouvelles tables `wifi_comptes` et `wifi_etat` (`sql/migration_wifi.sql`, créées aussi automatiquement).
+
+### Tests effectués
+- Test dans Chromium : manifeste valide, Service Worker actif, application détectée comme installable, page « Pas de connexion » affichée hors ligne.
+- Page Admin → Wi-Fi testée en local avec une base MariaDB (création, nouveau mot de passe, désactivation, suppression, état « Raspberry synchronisé »).
+- Hachage des mots de passe vérifié identique entre PHP (app) et Python (portail du Raspberry).
+
+## Tom :
+
+### Point d'accès Wi-Fi sur le Raspberry (`raspberry/install_wifi.sh`)
+- Script d'installation automatique (relançable sans risque) qui configure :
+  - **hostapd** : point d'accès Wi-Fi `Sabre-Arbitrage` sur `wlan0` (pays CH, canal 6) ;
+  - **adresse fixe** `10.42.0.1/24` (service `sabre-ap-ip`), `wlan0` retiré de NetworkManager ;
+  - **dnsmasq** : DHCP (`10.42.0.20` → `.250`) et DNS sans serveur externe ;
+  - **pare-feu nftables** (`sabre-ap-firewall`) : depuis le Wi-Fi, seuls DHCP, DNS, le portail et l'application sont joignables, ni internet, ni réseau local, ni SSH ;
+  - **certificats** : autorité locale limitée par *name constraints* à `sabre.lan` et `10.42.0.0/24` (elle ne peut pas servir à intercepter d'autres sites), certificat serveur de 800 jours (limite iOS) ;
+  - **proxy HTTPS Caddy** ajouté à `docker-compose.yml` (profil `pi`) ;
+  - page d'accueil `http://sabre.lan` qui explique l'installation du certificat (Android, iPhone, Windows, Mac) et bascule automatiquement en HTTPS une fois le certificat reconnu.
+- Commande `sabre-wifi` sur le Pi : `statut`, `sessions`, comptes de secours locaux (`secours-ajouter` / `secours-supprimer`), synchronisation des comptes de l'app toutes les 15 secondes (timer systemd).
+
+### Portail de connexion (`raspberry/sabre-portail.py`)
+- Petit serveur Python (bibliothèque standard uniquement, service systemd `sabre-portail`) :
+  - tant qu'un appareil n'est pas identifié, toutes ses pages web arrivent sur le portail ; le DNS renvoie tous les noms vers le Pi, ce qui fait apparaître automatiquement la fenêtre **« Se connecter au réseau »** sur les téléphones ;
+  - après identifiant + mot de passe valides (comptes Admin → Wi-Fi ou comptes de secours), l'**adresse IP + MAC** de l'appareil est ajoutée au pare-feu (set nftables `autorises`) pour **12 heures** ;
+  - sécurité : 5 essais ratés → blocage 5 minutes, comparaison des mots de passe à temps constant, un compte supprimé ou désactivé dans l'app est **déconnecté en ~15 secondes** ;
+  - une fois identifié, le proxy répond « connecté » aux tests automatiques des téléphones (Android, Apple, Windows, Firefox) pour qu'ils restent sur ce Wi-Fi.
+
+```mermaid
+sequenceDiagram
+    participant T as Téléphone
+    participant F as Pare-feu (nftables)
+    participant P as Portail (sabre-portail)
+    participant C as Proxy HTTPS (Caddy)
+    T->>F: Rejoint le Wi-Fi, ouvre une page web
+    F->>P: Appareil inconnu : redirection vers le portail
+    P-->>T: Page « Connexion au Wi-Fi »
+    T->>P: Identifiant + mot de passe
+    P->>P: Vérification (comptes Admin → Wi-Fi)
+    P->>F: Ajout IP + MAC dans « autorises » (12 h)
+    T->>F: http://sabre.lan
+    F->>C: Appareil autorisé : accès à l'app
+    C-->>T: Installation du certificat puis app en HTTPS
+```
+
+### Problèmes rencontrés et solutions
+- **Port 80 déjà utilisé sur le Pi** (Apache installé le 03.09) : le proxy ne démarrait pas (`address already in use`). Solution : détection automatique par le script ; on a choisi de **ne pas arrêter Apache**, le proxy passe donc sur les ports 8081/8443 et le pare-feu redirige le Wi-Fi 80 → 8081 et 443 → 8443.
+- **App inaccessible en LAN** : la première version réservait l'app au Wi-Fi seulement. Accès LAN rétabli par défaut (option `--wifi-seulement` pour revenir en arrière). Deuxième cause : en relançant le script, l'ancien pare-feu restait chargé (service systemd `oneshot` déjà « actif »). Corrigé avec un `systemctl restart` au lieu de `enable --now`.
+- **Tous les téléphones avaient la même adresse IP** pour l'app (le réseau Docker remplaçait l'adresse réelle), donc les limites anti-abus (connexion, API) auraient été partagées par tout le Wi-Fi. Solution : proxy Caddy en `network_mode: host`, qui transmet l'IP réelle via `X-Forwarded-For` ; suppression de l'en-tête `CF-Connecting-IP` qu'un téléphone pourrait falsifier ; vérification que la passerelle Docker (`172.19.0.1`) est bien dans les proxies de confiance (`172.16.0.0/12`).
+- **Wi-Fi qui se connecte puis se déconnecte en boucle** : la première version utilisait le **WPA2-Entreprise** (le téléphone demande lui-même identifiant + mot de passe, PEAP / MSCHAPv2). Les journaux `hostapd` montraient des `associated` / `disassociated` en boucle sans aucun échange d'authentification : la **puce Wi-Fi intégrée du Raspberry ne gère pas le WPA2-Entreprise en mode point d'accès**. Les alternatives étaient une clé Wi-Fi USB compatible ou un portail de connexion ; on a choisi le **portail de connexion**, qui fonctionne avec le Pi actuel.
+
+### Tests effectués
+- Règles du pare-feu validées par `nft`, configuration du proxy validée par `caddy validate`.
+- Simulation du portail : bon / mauvais mot de passe, blocage au 6ᵉ essai, déconnexion après suppression du compte.
+- Sur le Raspberry : tous les services `active`, HTTPS répond `200`, application accessible en LAN et via le Wi-Fi avec le portail.
+
+### Déploiement sur le Raspberry
+```powershell
+# Sur le PC
+tar -czf webapp.tar.gz --exclude="webapp_arbitrage_avec_touche/_backup*" --exclude="webapp_arbitrage_avec_touche/_to_delete" --exclude="webapp_arbitrage_avec_touche/.env" webapp_arbitrage_avec_touche
+scp webapp.tar.gz cuto@10.5.35.30:~/Desktop/
+```
+```bash
+# Sur le Pi
+cd ~/Desktop && tar -xzf webapp.tar.gz && rm webapp.tar.gz
+cd webapp_arbitrage_avec_touche
+sudo bash raspberry/install_wifi.sh
+```
+
+## Résultat commun :
+- L'application s'installe sur l'écran d'accueil des téléphones et des PC.
+- Le Raspberry diffuse le Wi-Fi **Sabre-Arbitrage** : on s'y identifie avec un compte créé dans **Admin → Wi-Fi**, puis on accède à l'application en HTTPS sur `sabre.lan`.
+- Le Wi-Fi est isolé (pas d'internet, pas de réseau local, pas de SSH) et l'application reste accessible en LAN.
+- ⚠️ Ce Wi-Fi n'ayant pas internet, les autres applications du téléphone ne fonctionnent pas tant qu'on y est connecté.

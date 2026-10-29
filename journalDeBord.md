@@ -305,3 +305,53 @@ sudo bash raspberry/install_wifi.sh
 - Le Raspberry diffuse le Wi-Fi **Sabre-Arbitrage** : on s'y identifie avec un compte créé dans **Admin → Wi-Fi**, puis on accède à l'application en HTTPS sur `sabre.lan`.
 - Le Wi-Fi est isolé (pas d'internet, pas de réseau local, pas de SSH) et l'application reste accessible en LAN.
 - ⚠️ Ce Wi-Fi n'ayant pas internet, les autres applications du téléphone ne fonctionnent pas tant qu'on y est connecté.
+
+# 29.10 :
+
+## Tom :
+
+### Télécommandes d'arbitre en Bluetooth (`telecommandes/circuitpython/code.py`)
+- Chaque arbitre peut donner ses points avec une **télécommande** (CircuitPython, petit écran OLED SSD1306) au lieu du téléphone :
+  - bouton **rouge** = +1 Aka, bouton **bleu** = +1 Ao ;
+  - les **deux boutons ensemble** (dans les 0,15 s) = annule le dernier point de cet arbitre.
+- Le nom Bluetooth doit commencer par `TEL` (`DEVICE_NAME`, par exemple `TEL_2`) et être différent pour chaque télécommande : c'est ainsi que le Raspberry la reconnaît.
+- L'écran affiche les points donnés par l'arbitre, le chrono, **STOP** pendant une pause, le vainqueur à la fin, **SANS ARBITRE** si elle n'est associée à personne et **PI ?** si le Raspberry ne répond plus depuis 3 secondes.
+- Le « BLE workflow » de CircuitPython (transfert de fichiers par Bluetooth) est coupé au démarrage : sinon il fait sa propre publicité Bluetooth et gêne la connexion au Raspberry.
+
+### Récepteur Bluetooth (`ble_receiver/receiver.py`)
+- Le même service qui écoute les sabres se connecte maintenant aussi aux télécommandes : une télécommande allumée à portée apparaît toute seule dans **Admin → Sabres → Télécommandes**, où on lui choisit son arbitre.
+- Protocole texte sur l'UART Bluetooth :
+  - télécommande → Pi : `PT:R`, `PT:B`, `UNDO` ;
+  - Pi → télécommande : `NOARB`, `IDLE`, `FIGHT`, `STOP`, `TIME:<s>`, `SCORE:<rouge>:<bleu>`, `WIN:R|B|D`, `OK`, `ERR:<raison>`.
+- Un point de télécommande passe par **les mêmes contrôles** que le pupitre du site (combat en cours, pas en pause, arbitre bien assigné) et compte pour l'arbitre associé, dans le combat en cours où il arbitre. Le vainqueur reste affiché 2 minutes après la fin.
+- Nouvelle table `telecommandes` (créée automatiquement par le récepteur et par le site).
+- `tzdata` ajouté au `Dockerfile` du récepteur : le conteneur utilise la même heure que le reste de l'application.
+
+```mermaid
+sequenceDiagram
+    participant T as Télécommande (TEL_2)
+    participant R as Récepteur BLE (Pi)
+    participant D as MariaDB
+    T->>R: PT:R (bouton rouge)
+    R->>D: Combat en cours de l'arbitre associé ?
+    D-->>R: Combat 3, arbitre central
+    R->>D: Ajout du point (points_live)
+    R-->>T: OK puis SCORE:3:1 et TIME:95
+```
+
+### Écran et bureau du Raspberry (`raspberry/`)
+- `install_ecran.sh` : le site démarre tout seul au démarrage du Pi (service `sabre-app` : `docker compose up -d`), et mise à jour du système (sauf avec `--sans-maj`).
+- `sabre-fond-ecran.py` : le fond d'écran du Pi affiche le nom et le mot de passe du Wi-Fi, l'identifiant du portail, un **QR code pour rejoindre le Wi-Fi** et un **QR code pour ouvrir le site**. Il est vérifié toutes les 15 secondes et redessiné seulement si une de ces informations change dans **Admin → Wi-Fi**.
+- `install_raccourci.sh` : bureau épuré avec un seul raccourci « Sabre Arbitrage » qui ouvre le site (option `--desinstaller` pour remettre le bureau comme avant ; les fichiers du bureau sont seulement masqués, jamais supprimés).
+
+### Problème rencontré et solution
+- **Sabres et télécommandes qui se déconnectaient** : le Wi-Fi du point d'accès et le Bluetooth partagent la même puce radio sur le Raspberry. Avec le délai de supervision par défaut (420 ms), quelques paquets perdus suffisaient à couper la connexion. Solution : délai de supervision du lien passé à **4 secondes** dans le récepteur.
+
+### Dépôt GitHub
+- Envoi sur ce dépôt du récepteur Bluetooth à jour, du code des télécommandes et des scripts du Raspberry. La partie site web (page d'aide, captures, documentation PDF) est dans le dépôt du projet web.
+- Ajout d'un `.gitattributes` pour que les scripts du Raspberry gardent leurs fins de ligne Linux (sinon ils ne s'exécutent pas sur le Pi).
+- Push réalisé avec l'aide de l'IA (Claude).
+
+## Résultat :
+- Les arbitres peuvent arbitrer avec une télécommande Bluetooth, exactement comme avec le pupitre du site.
+- Le Raspberry démarre le site tout seul et affiche à l'écran les informations de connexion au Wi-Fi avec des QR codes.

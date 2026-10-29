@@ -344,11 +344,12 @@ La page d'arbitrage affiche, outre les boutons de saisie manuelle des points :
 
 | Livrable | Format | Description |
 |---|---|---|
-| Code source complet | Git (GitHub CFPT) | Dépôt incluant tout le code : firmware CircuitPython, daemon Python, application PHP, Dockerfile, docker-compose.yml |
+| Code source matériel | Git (ce dépôt) | Firmware CircuitPython des sabres et des télécommandes, récepteur Bluetooth Python, scripts du Raspberry Pi |
+| Code source de l'application web | Git ([dépôt LuTo](https://github.com/CFPT-AWEB-PH/2026-27_I.DA-P3B_LuTo)) | Application PHP, base de données, Dockerfile, docker-compose.yml |
 | Cahier des charges | `.md` / `.docx` / `.pdf` | Ce document — spécifications fonctionnelles et techniques du projet |
 | Journal de bord | Markdown (GitHub) | Compte-rendu hebdomadaire des activités de Tom et Lucas |
 | README.md | Markdown (GitHub) | Documentation technique : démarrage rapide, architecture, variables d'environnement, gestion des sabres BLE |
-| Base de données | SQL (schema + migrations) | Fichiers `docker/init.sql` et `sql/migration_ble.sql` pour l'installation et la migration |
+| Base de données | SQL | Schéma complet `app/sql/init.sql` du dépôt LuTo (tables BLE incluses) |
 | Matériel fonctionnel | Hardware | Deux sabres laser équipés de XIAO nRF52840 Sense opérationnels |
 | Démonstration live | Présentation orale | Démonstration du système complet en conditions réelles devant les enseignants |
 

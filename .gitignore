@@ -1,0 +1,20 @@
+# Secrets
+.env
+.env.*
+
+# Fichiers générés par CircuitPython quand on copie depuis la carte
+boot_out.txt
+lib/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Systèmes / éditeurs
+.DS_Store
+Thumbs.db
+desktop.ini
+System Volume Information/
+.vscode/
+.idea/

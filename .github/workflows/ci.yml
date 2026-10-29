@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntaxe Python (récepteur, Raspberry, firmwares CircuitPython)
+        run: python3 -m py_compile ble_receiver/receiver.py raspberry/*.py sabre/code.py telecommandes/circuitpython/code.py
+
+      - name: Syntaxe des scripts shell du Raspberry
+        run: for f in raspberry/*.sh raspberry/sabre-wifi; do bash -n "$f"; done
+
+      - name: Construction de l'image du récepteur Bluetooth
+        run: docker build -t sabre-ble ble_receiver
+
+      # Le Pi s'installe depuis app/ du dépôt LuTo : on signale toute différence
+      - name: Identique au dépôt de l'application (LuTo)
+        run: |
+          git clone --depth 1 https://github.com/CFPT-AWEB-PH/2026-27_I.DA-P3B_LuTo.git /tmp/luto
+          diff -r -x __pycache__ ble_receiver /tmp/luto/app/ble_receiver
+          diff -r -x __pycache__ raspberry /tmp/luto/app/raspberry
+          diff -r -x __pycache__ telecommandes/circuitpython /tmp/luto/app/telecommandes/circuitpython
